@@ -1,0 +1,20 @@
+{
+  "name": "e-market",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^7.2.4"
+  },
+  "dependencies": {
+    "date-fns": "^4.1.0",
+    "firebase": "^12.6.0",
+    "html5-qrcode": "^2.3.8",
+    "lucide": "^0.554.0"
+  }
+}

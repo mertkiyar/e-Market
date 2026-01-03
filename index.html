@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>e-Market</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+  <div id="app">
+    <header id="top-bar">
+      <h1 id="page-title">Tarayıcı</h1>
+      <div id="header-actions"></div>
+    </header>
+
+    <main id="main-content">
+      <!-- Views will be injected here -->
+    </main>
+
+    <nav id="bottom-nav">
+      <button class="nav-item active" data-view="scanner">
+        <i data-lucide="scan-line"></i>
+        <span>Tarayıcı</span>
+      </button>
+      <button class="nav-item" data-view="products">
+        <i data-lucide="package"></i>
+        <span>Ürünler</span>
+      </button>
+      <button class="nav-item" data-view="history">
+        <i data-lucide="clock"></i>
+        <span>Geçmiş</span>
+      </button>
+      <button class="nav-item" data-view="cart">
+        <i data-lucide="shopping-cart"></i>
+        <span>Sepet</span>
+        <span id="cart-badge" class="hidden">0</span>
+      </button>
+    </nav>
+  </div>
+  <script type="module" src="/main.js"></script>
+</body>
+
+</html>
