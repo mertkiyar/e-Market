@@ -99,4 +99,4 @@ npm run preview
 
 ## License
 
-Private / Proprietary
+MIT License
