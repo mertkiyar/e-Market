@@ -1,4 +1,4 @@
-# e-Market - Mobile Barcode Scanner
+# e-Market - Mobile Barcode Scanner    ([DEMO](https://market.mrtkyr.com))
 
 A web-based mobile barcode scanner application for small businesses. This application allows users to scan products, manage inventory, create shopping carts, and track sales history. It is designed to run on mobile devices with camera support.
 
@@ -9,6 +9,12 @@ A web-based mobile barcode scanner application for small businesses. This applic
 - **Manual Entry**: Option to manually enter barcodes if scanning fails.
 - **Camera Control**: Efficient camera lifecycle management to preserve battery. The camera active state is optimized for user flow.
 - **Sound Feedback**: Audio cues for successful scans, errors, and cart additions.
+
+<p align="center">
+  <img src="screenshots/main.jpeg" width="25%"/>
+  <img src="screenshots/scan.jpeg" width="25%" />
+  <img src="screenshots/edit-product.jpeg" width="25%" />
+</p>
 
 ### Product Management
 - **Inventory List**: View all saved products with search functionality.
@@ -25,6 +31,12 @@ A web-based mobile barcode scanner application for small businesses. This applic
 ### Sales History
 - **Daily Grouping**: Sales are grouped by date for easy review.
 - **Restore Cart**: Ability to reload a past sale back into the active cart for repeat orders.
+
+<p align="center">
+  <img src="screenshots/products.jpeg" width="25%"/>
+  <img src="screenshots/history.jpeg" width="25%" />
+  <img src="screenshots/cart.jpeg" width="25%"/>
+</p>
 
 ## Technology Stack
 
