@@ -2,6 +2,8 @@
 
 A web-based mobile barcode scanner application for small businesses. This application allows users to scan products, manage inventory, create shopping carts, and track sales history. It is designed to run on mobile devices with camera support.
 
+This project developed with AI tools like Gemini 3 Pro and Claude Opus 4.5
+
 ## Features
 
 ### Scanner
