@@ -694,10 +694,23 @@ const openProductModal = (initialData = {}, isSearchMode = false) => {
         }
 
         const formData = new FormData(e.target);
+        const rawName = (formData.get('name') || '').trim();
+        const rawPrice = parseFloat(formData.get('price'));
+
+        // Validate required fields before saving
+        if (!rawName) {
+            showToast('Ürün adı boş olamaz', 'alert-circle');
+            return;
+        }
+        if (isNaN(rawPrice) || rawPrice < 0) {
+            showToast('Geçerli bir fiyat girin', 'alert-circle');
+            return;
+        }
+
         const newProduct = {
             barcode: formData.get('barcode'),
-            name: formData.get('name'),
-            price: parseFloat(formData.get('price')),
+            name: rawName,
+            price: rawPrice,
             image: formData.get('image'),
             updatedAt: new Date().toISOString(),
             addedAt: isEdit ? initialData.addedAt : new Date().toISOString()
