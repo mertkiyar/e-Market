@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, orderBy, setDoc, increment } from "firebase/firestore";
+import { getFirestore, collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, orderBy, setDoc, increment, getDoc, writeBatch } from "firebase/firestore";
 
 const firebaseConfig = {
     apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -71,4 +71,31 @@ export const incrementScanCount = async (barcode) => {
         scanCount: increment(1),
         lastScanned: new Date().toISOString()
     }, { merge: true });
+};
+
+// --- Approval System ---
+
+// Fetch approval password hash from settings
+export const fetchApprovalHash = async () => {
+    const docRef = doc(db, 'settings', 'approval');
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+        return docSnap.data().hash || null;
+    }
+    return null;
+};
+
+// Save approval password hash to settings
+export const saveApprovalHash = async (hash) => {
+    await setDoc(doc(db, 'settings', 'approval'), { hash, updatedAt: new Date().toISOString() });
+};
+
+// Bulk approve products (set pending to false)
+export const approveProducts = async (barcodes) => {
+    const batch = writeBatch(db);
+    barcodes.forEach(barcode => {
+        const ref = doc(db, 'products', barcode);
+        batch.update(ref, { pending: false });
+    });
+    await batch.commit();
 };

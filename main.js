@@ -1,8 +1,8 @@
 import './style.css';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
-import { createIcons, ScanLine, Package, ShoppingCart, Plus, Minus, Trash2, Edit2, Check, X, ChevronDown, Search, Keyboard, AlertCircle, Camera, PowerOff, Play, RotateCcw, Clock, Copy } from 'lucide';
+import { createIcons, ScanLine, Package, ShoppingCart, Plus, Minus, Trash2, Edit2, Check, X, ChevronDown, Search, Keyboard, AlertCircle, Camera, PowerOff, Play, RotateCcw, Clock, Copy, AlertTriangle, Shield, CheckCircle, Lock } from 'lucide';
 import { format } from 'date-fns';
-import { fetchSales, createSale, fetchProducts, saveProduct, deleteProduct, incrementScanCount } from './firebase.js';
+import { fetchSales, createSale, fetchProducts, saveProduct, deleteProduct, incrementScanCount, fetchApprovalHash, saveApprovalHash, approveProducts } from './firebase.js';
 
 // --- Sound Manager ---
 const SoundManager = {
@@ -65,6 +65,7 @@ const state = {
     cartSearchQuery: '',
     productSearchQuery: '',
     scannerStarted: false,
+    approvalHash: null, // Cached approval password hash from Firestore
 };
 
 // --- DOM Elements ---
@@ -124,7 +125,7 @@ const showToast = (msg, icon = 'info') => {
 };
 
 // --- Icons ---
-const initIcons = () => createIcons({ icons: { ScanLine, Package, ShoppingCart, Plus, Minus, Trash2, Edit2, Check, X, ChevronDown, Search, Keyboard, AlertCircle, Camera, PowerOff, Play, Clock, Copy } });
+const initIcons = () => createIcons({ icons: { ScanLine, Package, ShoppingCart, Plus, Minus, Trash2, Edit2, Check, X, ChevronDown, Search, Keyboard, AlertCircle, Camera, PowerOff, Play, Clock, Copy, AlertTriangle, Shield, CheckCircle, Lock } });
 
 // --- Router & Rendering ---
 const render = () => {
@@ -458,11 +459,15 @@ const showProductOverlay = (product) => {
     sheet.innerHTML = `
         <div class="overlay-handle"></div>
         <div style="display:flex; gap:16px; align-items:flex-start;">
-            <img src="${product.image || 'https://placehold.co/100x100?text=No+Img'}" style="width:80px; height:80px; border-radius:12px; object-fit:cover; background:var(--surface-light);">
+            <div class="product-image-wrapper" style="flex-shrink:0;">
+                <img src="${product.image || 'https://placehold.co/100x100?text=No+Img'}" style="width:80px; height:80px; border-radius:12px; object-fit:cover; background:var(--surface-light);">
+                ${product.pending ? '<div class="pending-badge" style="width:20px; height:20px;"><i data-lucide="alert-triangle" size="12"></i></div>' : ''}
+            </div>
             <div style="flex:1;">
                 <h3 style="margin-bottom:4px;">${product.name}</h3>
                 <div style="color:var(--success); font-weight:700; font-size:1.25rem;">${parseFloat(product.price).toFixed(2)}₺</div>
                 <div style="color:var(--text-muted); font-size:0.8rem; margin-top:4px;">${product.barcode}</div>
+                ${product.pending ? '<div style="display:inline-flex; align-items:center; gap:4px; background:rgba(234,179,8,0.15); color:#eab308; padding:2px 8px; border-radius:6px; font-size:0.75rem; font-weight:600; margin-top:4px;"><i data-lucide="alert-triangle" size="10"></i> Onay Bekliyor</div>' : ''}
             </div>
         </div>
         
@@ -712,6 +717,7 @@ const openProductModal = (initialData = {}, isSearchMode = false) => {
             name: rawName,
             price: rawPrice,
             image: formData.get('image'),
+            pending: true, // Requires approval
             updatedAt: new Date().toISOString(),
             addedAt: isEdit ? initialData.addedAt : new Date().toISOString()
         };
@@ -776,10 +782,185 @@ const closeModal = () => {
     }
 };
 
+// --- Approval System ---
+const hashPassword = async (password) => {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(password);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+};
+
+const openApprovalModal = (selectedBarcodes = null) => {
+    const modal = document.getElementById('product-modal');
+    const isSetup = !state.approvalHash; // First time — no password set yet
+    const pendingProducts = state.products.filter(p => p.pending);
+    const targetBarcodes = selectedBarcodes || pendingProducts.map(p => p.barcode);
+
+    if (targetBarcodes.length === 0) {
+        showToast('Onay bekleyen ürün yok', 'check-circle');
+        return;
+    }
+
+    modal.innerHTML = `
+        <div class="modal-header">
+            <h3 style="margin:0;">${isSetup ? 'Onay Şifresi Belirle' : 'Ürünleri Onayla'}</h3>
+            <button id="btn-close-modal" style="background:none; border:none; color:var(--text); cursor:pointer;">
+                <i data-lucide="x"></i>
+            </button>
+        </div>
+        <div class="modal-content">
+            <div style="text-align:center; padding:20px 0;">
+                <div style="background:${isSetup ? 'rgba(99,102,241,0.15)' : 'rgba(234,179,8,0.15)'}; width:64px; height:64px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto 16px;">
+                    <i data-lucide="${isSetup ? 'shield' : 'lock'}" size="28" color="${isSetup ? 'var(--primary)' : '#eab308'}"></i>
+                </div>
+                <p style="color:var(--text-muted); margin-bottom:24px;">
+                    ${isSetup 
+                        ? 'Ürün onayı için kullanılacak şifreyi belirleyin.' 
+                        : `<strong>${targetBarcodes.length}</strong> ürün onay bekliyor.`}
+                </p>
+            </div>
+
+            <form id="approval-form">
+                <div class="form-group">
+                    <label class="form-label">${isSetup ? 'Yeni Şifre' : 'Onay Şifresi'}</label>
+                    <input type="password" class="form-input" name="password" placeholder="Şifre girin..." autofocus required>
+                </div>
+                ${isSetup ? `
+                    <div class="form-group">
+                        <label class="form-label">Şifreyi Tekrarla</label>
+                        <input type="password" class="form-input" name="password_confirm" placeholder="Şifreyi tekrar girin..." required>
+                    </div>
+                ` : ''}
+                <div id="approval-error" style="display:none; color:var(--danger); text-align:center; margin-bottom:16px; font-size:0.9rem;"></div>
+                <button type="submit" class="btn btn-primary" id="btn-approval-submit">
+                    <i data-lucide="${isSetup ? 'shield' : 'check-circle'}"></i>
+                    ${isSetup ? 'Şifreyi Kaydet' : (selectedBarcodes ? 'Seçilenleri Onayla' : 'Tümünü Onayla')}
+                </button>
+                ${!isSetup ? `
+                    <button type="button" id="btn-change-approval-pw" class="btn btn-secondary" style="margin-top:12px; background:transparent; border:1px solid var(--border); font-size:0.85rem;">
+                        <i data-lucide="shield"></i> Şifreyi Değiştir
+                    </button>
+                ` : ''}
+            </form>
+        </div>
+    `;
+
+    modal.classList.add('active');
+    initIcons();
+
+    document.getElementById('btn-close-modal').onclick = closeModal;
+
+    // Change password flow
+    if (!isSetup) {
+        const changePwBtn = document.getElementById('btn-change-approval-pw');
+        if (changePwBtn) {
+            changePwBtn.onclick = () => {
+                // Re-open in setup mode by temporarily clearing hash
+                const originalHash = state.approvalHash;
+                state.approvalHash = null;
+                openApprovalModal(targetBarcodes);
+                // Store original so we can revert if cancelled
+                document.getElementById('btn-close-modal').onclick = () => {
+                    state.approvalHash = originalHash;
+                    closeModal();
+                };
+            };
+        }
+    }
+
+    document.getElementById('approval-form').onsubmit = async (e) => {
+        e.preventDefault();
+        const errorEl = document.getElementById('approval-error');
+        const submitBtn = document.getElementById('btn-approval-submit');
+        const password = e.target.password.value;
+
+        if (!password) return;
+
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'İşleniyor...';
+
+        try {
+            if (isSetup) {
+                // Setup mode — set new password
+                const confirm = e.target.password_confirm.value;
+                if (password !== confirm) {
+                    errorEl.textContent = 'Şifreler eşleşmiyor.';
+                    errorEl.style.display = 'block';
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = `<i data-lucide="shield"></i> Şifreyi Kaydet`;
+                    initIcons();
+                    return;
+                }
+                if (password.length < 4) {
+                    errorEl.textContent = 'Şifre en az 4 karakter olmalı.';
+                    errorEl.style.display = 'block';
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = `<i data-lucide="shield"></i> Şifreyi Kaydet`;
+                    initIcons();
+                    return;
+                }
+                const hash = await hashPassword(password);
+                await saveApprovalHash(hash);
+                state.approvalHash = hash;
+                showToast('Onay şifresi kaydedildi', 'shield');
+                closeModal();
+
+                // Re-open for approval if there are pending products
+                if (targetBarcodes.length > 0) {
+                    setTimeout(() => openApprovalModal(targetBarcodes), 300);
+                }
+            } else {
+                // Verify mode — check password and approve
+                const inputHash = await hashPassword(password);
+                if (inputHash !== state.approvalHash) {
+                    errorEl.textContent = 'Yanlış şifre.';
+                    errorEl.style.display = 'block';
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = `<i data-lucide="check-circle"></i> ${selectedBarcodes ? 'Seçilenleri Onayla' : 'Tümünü Onayla'}`;
+                    initIcons();
+                    SoundManager.playError();
+                    return;
+                }
+
+                // Approve products
+                await approveProducts(targetBarcodes);
+                targetBarcodes.forEach(barcode => {
+                    const product = state.products.find(p => p.barcode === barcode);
+                    if (product) product.pending = false;
+                });
+
+                SoundManager.playSuccess();
+                showToast(`${targetBarcodes.length} ürün onaylandı`, 'check-circle');
+                closeModal();
+                render();
+            }
+        } catch (err) {
+            console.error(err);
+            errorEl.textContent = 'Bir hata oluştu.';
+            errorEl.style.display = 'block';
+            submitBtn.disabled = false;
+        }
+    };
+};
+
 // --- Standard Views (Products/Cart) ---
 const renderProducts = () => {
+    const pendingCount = state.products.filter(p => p.pending).length;
     pageTitle.textContent = `Ürünler (${state.products.length})`;
     headerActions.innerHTML = '';
+
+    // Add approve button in header if there are pending products
+    if (pendingCount > 0) {
+        headerActions.innerHTML = `
+            <button id="btn-header-approve" style="background:none; border:none; color:#eab308; cursor:pointer; display:flex; align-items:center; gap:4px; font-family:var(--font-main); font-weight:600; font-size:0.85rem;">
+                <i data-lucide="alert-triangle" size="18"></i>
+                <span>${pendingCount}</span>
+            </button>
+        `;
+        initIcons();
+        document.getElementById('btn-header-approve').onclick = () => openApprovalModal();
+    }
 
     let container = document.getElementById('list-view');
     let searchInput = document.getElementById('product-search-input');
@@ -823,9 +1004,28 @@ const renderProducts = () => {
         const listContainer = document.getElementById('product-list-container');
         listContainer.innerHTML = '';
 
+        // Pending approval banner
+        const pendingNow = state.products.filter(p => p.pending);
+        if (pendingNow.length > 0) {
+            const banner = document.createElement('div');
+            banner.className = 'pending-banner';
+            banner.innerHTML = `
+                <div class="pending-banner-content">
+                    <i data-lucide="alert-triangle" size="18"></i>
+                    <span><strong>${pendingNow.length}</strong> ürün onay bekliyor</span>
+                </div>
+                <button class="pending-banner-btn" id="btn-banner-approve">Onayla</button>
+            `;
+            listContainer.appendChild(banner);
+            document.getElementById('btn-banner-approve').onclick = () => openApprovalModal();
+        }
+
         // Filter
         let displayProducts = [...state.products];
         displayProducts.sort((a, b) => {
+            // Pending products first
+            if (a.pending && !b.pending) return -1;
+            if (!a.pending && b.pending) return 1;
             const countA = a.scanCount || 0;
             const countB = b.scanCount || 0;
             if (countB !== countA) return countB - countA;
@@ -836,11 +1036,11 @@ const renderProducts = () => {
 
         if (state.productSearchQuery) {
             const q = state.productSearchQuery.toLowerCase();
-            displayProducts = state.products.filter(p => (p.name || '').toLowerCase().includes(q) || (p.barcode || '').includes(q));
+            displayProducts = displayProducts.filter(p => (p.name || '').toLowerCase().includes(q) || (p.barcode || '').includes(q));
         }
 
         if (displayProducts.length === 0) {
-            listContainer.innerHTML = `<div class="empty-state"><p>Ürün bulunamadı.</p></div>`;
+            listContainer.innerHTML += `<div class="empty-state"><p>Ürün bulunamadı.</p></div>`;
             initIcons();
             return;
         }
@@ -854,12 +1054,16 @@ const renderProducts = () => {
         displayProducts.forEach(product => {
             const cartItem = state.cart.find(i => i.barcode === product.barcode);
             const qty = cartItem ? cartItem.quantity : 0;
+            const isPending = product.pending;
 
             const row = document.createElement('div');
-            row.className = 'cart-item';
+            row.className = `cart-item${isPending ? ' cart-item--pending' : ''}`;
             row.innerHTML = `
                 <div class="product-click-area" style="display:flex; gap:12px; align-items:center; flex:1;">
-                    <img src="${product.image || 'https://placehold.co/100x100?text=No+Img'}" class="product-image" style="width:48px; height:48px; object-fit:cover; border-radius:4px;">
+                    <div class="product-image-wrapper">
+                        <img src="${product.image || 'https://placehold.co/100x100?text=No+Img'}" class="product-image" style="width:48px; height:48px; object-fit:cover; border-radius:4px;">
+                        ${isPending ? '<div class="pending-badge"><i data-lucide="alert-triangle" size="12"></i></div>' : ''}
+                    </div>
                     <div>
                         <div style="font-weight:600;">${product.name || 'İsimsiz Ürün'}</div>
                         <div style="color:var(--success); font-weight:700; font-size:0.95rem;">${(parseFloat(product.price) || 0).toFixed(2)}₺</div>
@@ -1231,9 +1435,10 @@ navItems.forEach(item => {
 render();
 
 // Fetch initial data
-Promise.all([fetchSales(), fetchProducts()]).then(([sales, products]) => {
+Promise.all([fetchSales(), fetchProducts(), fetchApprovalHash()]).then(([sales, products, approvalHash]) => {
     state.sales = sales;
     state.products = products;
+    state.approvalHash = approvalHash;
     render(); // Re-render to show products if on products view
     if (state.view === 'history') renderHistory();
 }).catch(console.error);

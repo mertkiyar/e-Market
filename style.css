@@ -613,3 +613,80 @@ body {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
 }
+
+/* Product Image Wrapper (for pending badge overlay) */
+.product-image-wrapper {
+    position: relative;
+    flex-shrink: 0;
+}
+
+/* Pending Approval Badge */
+.pending-badge {
+    position: absolute;
+    top: -4px;
+    left: -4px;
+    width: 18px;
+    height: 18px;
+    background: #eab308;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #1e293b;
+    box-shadow: 0 2px 6px rgba(234, 179, 8, 0.4);
+    z-index: 2;
+    animation: pendingPulse 2s ease-in-out infinite;
+}
+
+@keyframes pendingPulse {
+    0%, 100% { box-shadow: 0 2px 6px rgba(234, 179, 8, 0.4); }
+    50% { box-shadow: 0 2px 12px rgba(234, 179, 8, 0.7); }
+}
+
+/* Pending Banner */
+.pending-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(234, 179, 8, 0.1);
+    border: 1px solid rgba(234, 179, 8, 0.25);
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+}
+
+.pending-banner-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #eab308;
+    font-size: 0.9rem;
+}
+
+.pending-banner-btn {
+    background: #eab308;
+    color: #1e293b;
+    border: none;
+    border-radius: 8px;
+    padding: 6px 16px;
+    font-weight: 700;
+    font-family: var(--font-main);
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: transform 0.1s, opacity 0.2s;
+}
+
+.pending-banner-btn:active {
+    transform: scale(0.96);
+}
+
+.pending-banner-btn:hover {
+    opacity: 0.9;
+}
+
+/* Pending item subtle indicator */
+.cart-item--pending {
+    border-left: 3px solid #eab308;
+    padding-left: 12px;
+    margin-left: -3px;
+}
