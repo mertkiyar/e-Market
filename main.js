@@ -437,12 +437,11 @@ const onScanSuccess = (decodedText, decodedResult) => {
 
     SoundManager.playSuccess();
 
-    // Increment Popularity
-    incrementScanCount(decodedText).catch(console.error);
-
     const product = state.products.find(p => p.barcode === decodedText);
 
     if (product) {
+        // Only increment scan count for known products
+        incrementScanCount(decodedText).catch(console.error);
         showProductOverlay(product);
     } else {
         showNewProductOverlay(decodedText);
