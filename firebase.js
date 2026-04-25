@@ -90,12 +90,42 @@ export const saveApprovalHash = async (hash) => {
     await setDoc(doc(db, 'settings', 'approval'), { hash, updatedAt: new Date().toISOString() });
 };
 
-// Bulk approve products (set pending to false)
-export const approveProducts = async (barcodes) => {
+// Bulk approve products (set pending/pendingDelete to false, or delete if pendingDelete approved)
+export const approveProducts = async (barcodes, products) => {
     const batch = writeBatch(db);
+    const toDelete = [];
     barcodes.forEach(barcode => {
-        const ref = doc(db, 'products', barcode);
-        batch.update(ref, { pending: false });
+        const product = products.find(p => p.barcode === barcode);
+        if (product && product.pendingDelete) {
+            // Approve deletion = actually delete
+            batch.delete(doc(db, 'products', barcode));
+            toDelete.push(barcode);
+        } else {
+            // Approve add/edit = clear pending flag
+            const ref = doc(db, 'products', barcode);
+            batch.update(ref, { pending: false, pendingDelete: false });
+        }
     });
     await batch.commit();
+    return toDelete; // Return which ones were deleted
+};
+
+// Bulk reject products (revert pending changes)
+export const rejectProducts = async (barcodes, products) => {
+    const batch = writeBatch(db);
+    const toRemove = [];
+    barcodes.forEach(barcode => {
+        const product = products.find(p => p.barcode === barcode);
+        if (product && product.pendingDelete) {
+            // Reject deletion = cancel delete, keep product
+            const ref = doc(db, 'products', barcode);
+            batch.update(ref, { pendingDelete: false });
+        } else {
+            // Reject new/edited product = delete it
+            batch.delete(doc(db, 'products', barcode));
+            toRemove.push(barcode);
+        }
+    });
+    await batch.commit();
+    return toRemove;
 };

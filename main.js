@@ -2,7 +2,7 @@ import './style.css';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { createIcons, ScanLine, Package, ShoppingCart, Plus, Minus, Trash2, Edit2, Check, X, ChevronDown, Search, Keyboard, AlertCircle, Camera, PowerOff, Play, RotateCcw, Clock, Copy, AlertTriangle, Shield, CheckCircle, Lock } from 'lucide';
 import { format } from 'date-fns';
-import { fetchSales, createSale, fetchProducts, saveProduct, deleteProduct, incrementScanCount, fetchApprovalHash, saveApprovalHash, approveProducts } from './firebase.js';
+import { fetchSales, createSale, fetchProducts, saveProduct, deleteProduct, incrementScanCount, fetchApprovalHash, saveApprovalHash, approveProducts, rejectProducts } from './firebase.js';
 
 // --- Sound Manager ---
 const SoundManager = {
@@ -460,14 +460,16 @@ const showProductOverlay = (product) => {
         <div class="overlay-handle"></div>
         <div style="display:flex; gap:16px; align-items:flex-start;">
             <div class="product-image-wrapper" style="flex-shrink:0;">
-                <img src="${product.image || 'https://placehold.co/100x100?text=No+Img'}" style="width:80px; height:80px; border-radius:12px; object-fit:cover; background:var(--surface-light);">
-                ${product.pending ? '<div class="pending-badge" style="width:20px; height:20px;"><i data-lucide="alert-triangle" size="12"></i></div>' : ''}
+                <img src="${product.image || 'https://placehold.co/100x100?text=No+Img'}" style="width:80px; height:80px; border-radius:12px; object-fit:cover; background:var(--surface-light); ${product.pendingDelete ? 'opacity:0.5;' : ''}">
+                ${product.pending && !product.pendingDelete ? '<div class="pending-dot pending-dot--yellow" style="width:12px; height:12px;"></div>' : ''}
+                ${product.pendingDelete ? '<div class="pending-dot pending-dot--red" style="width:12px; height:12px;"></div>' : ''}
             </div>
             <div style="flex:1;">
                 <h3 style="margin-bottom:4px;">${product.name}</h3>
                 <div style="color:var(--success); font-weight:700; font-size:1.25rem;">${parseFloat(product.price).toFixed(2)}₺</div>
                 <div style="color:var(--text-muted); font-size:0.8rem; margin-top:4px;">${product.barcode}</div>
-                ${product.pending ? '<div style="display:inline-flex; align-items:center; gap:4px; background:rgba(234,179,8,0.15); color:#eab308; padding:2px 8px; border-radius:6px; font-size:0.75rem; font-weight:600; margin-top:4px;"><i data-lucide="alert-triangle" size="10"></i> Onay Bekliyor</div>' : ''}
+                ${product.pendingDelete ? '<div class="pending-tag pending-tag--red">Silme Onayı Bekliyor</div>' : ''}
+                ${product.pending && !product.pendingDelete ? '<div class="pending-tag pending-tag--yellow">Onay Bekliyor</div>' : ''}
             </div>
         </div>
         
@@ -747,26 +749,26 @@ const openProductModal = (initialData = {}, isSearchMode = false) => {
         render();
     };
 
-    // Delete Logic
+    // Delete Logic — mark as pendingDelete instead of immediate deletion
     if (isEdit) {
         const deleteBtn = document.getElementById('btn-delete-product');
         if (deleteBtn) {
             deleteBtn.onclick = () => {
-                if (confirm('Bu ürünü silmek istediğinize emin misiniz?')) {
-                    // Remove from products
-                    state.products = state.products.filter(p => p.barcode !== initialData.barcode);
+                if (confirm('Bu ürün silme onayı için işaretlenecek. Devam edilsin mi?')) {
+                    // Mark for deletion
+                    const product = state.products.find(p => p.barcode === initialData.barcode);
+                    if (product) {
+                        product.pendingDelete = true;
+                        product.pending = true;
+                    }
 
-                    // Remove from cart if present
-                    state.cart = state.cart.filter(item => item.barcode !== initialData.barcode);
-                    StorageManager.saveCart(state.cart);
-
-                    // Persistence delete
-                    deleteProduct(initialData.barcode).then(() => {
-                        console.log("Deleted from Firebase");
+                    // Save to Firebase
+                    saveProduct({ barcode: initialData.barcode, pendingDelete: true, pending: true }).then(() => {
+                        showToast('Ürün silme onayı bekliyor', 'trash-2');
                     }).catch(console.error);
 
-                    showToast('Ürün silindi', 'trash-2');
                     closeModal();
+                    closeOverlay();
                     render();
                 }
             };
@@ -791,58 +793,97 @@ const hashPassword = async (password) => {
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 };
 
-const openApprovalModal = (selectedBarcodes = null) => {
+const openApprovalModal = () => {
     const modal = document.getElementById('product-modal');
     const isSetup = !state.approvalHash; // First time — no password set yet
     const pendingProducts = state.products.filter(p => p.pending);
-    const targetBarcodes = selectedBarcodes || pendingProducts.map(p => p.barcode);
 
-    if (targetBarcodes.length === 0) {
+    if (pendingProducts.length === 0 && !isSetup) {
         showToast('Onay bekleyen ürün yok', 'check-circle');
         return;
     }
 
+    // Build pending product list HTML
+    const pendingListHTML = pendingProducts.map(p => {
+        const typeLabel = p.pendingDelete
+            ? '<span class="pending-type pending-type--delete">Silinecek</span>'
+            : (p.addedAt === p.updatedAt
+                ? '<span class="pending-type pending-type--new">Yeni</span>'
+                : '<span class="pending-type pending-type--edit">Düzenlendi</span>');
+
+        return `
+            <label class="approval-item ${p.pendingDelete ? 'approval-item--delete' : ''}" data-barcode="${p.barcode}">
+                <input type="checkbox" class="approval-checkbox" value="${p.barcode}" checked>
+                <div class="approval-item-info">
+                    <div class="approval-item-name">${p.name || 'İsimsiz Ürün'}</div>
+                    <div class="approval-item-meta">${(parseFloat(p.price) || 0).toFixed(2)}₺ · ${p.barcode}</div>
+                </div>
+                ${typeLabel}
+            </label>
+        `;
+    }).join('');
+
     modal.innerHTML = `
         <div class="modal-header">
-            <h3 style="margin:0;">${isSetup ? 'Onay Şifresi Belirle' : 'Ürünleri Onayla'}</h3>
+            <h3 style="margin:0;">${isSetup ? 'Onay Şifresi Belirle' : 'Değişiklikleri Yönet'}</h3>
             <button id="btn-close-modal" style="background:none; border:none; color:var(--text); cursor:pointer;">
                 <i data-lucide="x"></i>
             </button>
         </div>
         <div class="modal-content">
-            <div style="text-align:center; padding:20px 0;">
-                <div style="background:${isSetup ? 'rgba(99,102,241,0.15)' : 'rgba(234,179,8,0.15)'}; width:64px; height:64px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto 16px;">
-                    <i data-lucide="${isSetup ? 'shield' : 'lock'}" size="28" color="${isSetup ? 'var(--primary)' : '#eab308'}"></i>
+            ${isSetup ? `
+                <div style="text-align:center; padding:20px 0;">
+                    <div style="background:rgba(99,102,241,0.15); width:64px; height:64px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto 16px;">
+                        <i data-lucide="shield" size="28" color="var(--primary)"></i>
+                    </div>
+                    <p style="color:var(--text-muted); margin-bottom:24px;">Ürün onayı için kullanılacak şifreyi belirleyin.</p>
                 </div>
-                <p style="color:var(--text-muted); margin-bottom:24px;">
-                    ${isSetup 
-                        ? 'Ürün onayı için kullanılacak şifreyi belirleyin.' 
-                        : `<strong>${targetBarcodes.length}</strong> ürün onay bekliyor.`}
-                </p>
-            </div>
-
-            <form id="approval-form">
-                <div class="form-group">
-                    <label class="form-label">${isSetup ? 'Yeni Şifre' : 'Onay Şifresi'}</label>
-                    <input type="password" class="form-input" name="password" placeholder="Şifre girin..." autofocus required>
-                </div>
-                ${isSetup ? `
+                <form id="approval-form">
+                    <div class="form-group">
+                        <label class="form-label">Yeni Şifre</label>
+                        <input type="password" class="form-input" name="password" placeholder="Şifre girin..." autofocus required>
+                    </div>
                     <div class="form-group">
                         <label class="form-label">Şifreyi Tekrarla</label>
                         <input type="password" class="form-input" name="password_confirm" placeholder="Şifreyi tekrar girin..." required>
                     </div>
-                ` : ''}
-                <div id="approval-error" style="display:none; color:var(--danger); text-align:center; margin-bottom:16px; font-size:0.9rem;"></div>
-                <button type="submit" class="btn btn-primary" id="btn-approval-submit">
-                    <i data-lucide="${isSetup ? 'shield' : 'check-circle'}"></i>
-                    ${isSetup ? 'Şifreyi Kaydet' : (selectedBarcodes ? 'Seçilenleri Onayla' : 'Tümünü Onayla')}
-                </button>
-                ${!isSetup ? `
+                    <div id="approval-error" style="display:none; color:var(--danger); text-align:center; margin-bottom:16px; font-size:0.9rem;"></div>
+                    <button type="submit" class="btn btn-primary" id="btn-approval-submit">
+                        <i data-lucide="shield"></i> Şifreyi Kaydet
+                    </button>
+                </form>
+            ` : `
+                <!-- Product Selection List -->
+                <div class="approval-list-header">
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                        <input type="checkbox" id="approval-select-all" checked>
+                        <span style="font-size:0.85rem; color:var(--text-muted);">Tümünü Seç (${pendingProducts.length})</span>
+                    </label>
+                </div>
+                <div class="approval-list" id="approval-list">
+                    ${pendingListHTML}
+                </div>
+
+                <!-- Actions -->
+                <form id="approval-form" style="margin-top:20px;">
+                    <div class="form-group">
+                        <label class="form-label">Onay Şifresi</label>
+                        <input type="password" class="form-input" name="password" placeholder="Şifre girin..." required>
+                    </div>
+                    <div id="approval-error" style="display:none; color:var(--danger); text-align:center; margin-bottom:16px; font-size:0.9rem;"></div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <button type="button" id="btn-reject" class="btn" style="background:var(--danger); color:white; border:none;">
+                            <i data-lucide="x"></i> Reddet
+                        </button>
+                        <button type="submit" class="btn btn-primary" id="btn-approval-submit">
+                            <i data-lucide="check-circle"></i> Onayla
+                        </button>
+                    </div>
                     <button type="button" id="btn-change-approval-pw" class="btn btn-secondary" style="margin-top:12px; background:transparent; border:1px solid var(--border); font-size:0.85rem;">
                         <i data-lucide="shield"></i> Şifreyi Değiştir
                     </button>
-                ` : ''}
-            </form>
+                </form>
+            `}
         </div>
     `;
 
@@ -851,24 +892,106 @@ const openApprovalModal = (selectedBarcodes = null) => {
 
     document.getElementById('btn-close-modal').onclick = closeModal;
 
-    // Change password flow
-    if (!isSetup) {
-        const changePwBtn = document.getElementById('btn-change-approval-pw');
-        if (changePwBtn) {
-            changePwBtn.onclick = () => {
-                // Re-open in setup mode by temporarily clearing hash
-                const originalHash = state.approvalHash;
-                state.approvalHash = null;
-                openApprovalModal(targetBarcodes);
-                // Store original so we can revert if cancelled
-                document.getElementById('btn-close-modal').onclick = () => {
-                    state.approvalHash = originalHash;
-                    closeModal();
-                };
+    // Select All toggle
+    const selectAllCheckbox = document.getElementById('approval-select-all');
+    if (selectAllCheckbox) {
+        selectAllCheckbox.onchange = () => {
+            document.querySelectorAll('.approval-checkbox').forEach(cb => {
+                cb.checked = selectAllCheckbox.checked;
+            });
+        };
+        // Update select-all when individual checkboxes change
+        document.querySelectorAll('.approval-checkbox').forEach(cb => {
+            cb.onchange = () => {
+                const allCheckboxes = document.querySelectorAll('.approval-checkbox');
+                const allChecked = [...allCheckboxes].every(c => c.checked);
+                selectAllCheckbox.checked = allChecked;
             };
-        }
+        });
     }
 
+    // Helper: get selected barcodes
+    const getSelectedBarcodes = () => {
+        return [...document.querySelectorAll('.approval-checkbox:checked')].map(cb => cb.value);
+    };
+
+    // Change password flow
+    const changePwBtn = document.getElementById('btn-change-approval-pw');
+    if (changePwBtn) {
+        changePwBtn.onclick = () => {
+            const originalHash = state.approvalHash;
+            state.approvalHash = null;
+            openApprovalModal();
+            document.getElementById('btn-close-modal').onclick = () => {
+                state.approvalHash = originalHash;
+                closeModal();
+            };
+        };
+    }
+
+    // Reject button
+    const rejectBtn = document.getElementById('btn-reject');
+    if (rejectBtn) {
+        rejectBtn.onclick = async () => {
+            const selected = getSelectedBarcodes();
+            if (selected.length === 0) {
+                showToast('Hiç ürün seçilmedi', 'alert-circle');
+                return;
+            }
+
+            const password = document.querySelector('#approval-form input[name="password"]').value;
+            if (!password) {
+                document.getElementById('approval-error').textContent = 'Şifre gerekli.';
+                document.getElementById('approval-error').style.display = 'block';
+                return;
+            }
+
+            rejectBtn.disabled = true;
+            rejectBtn.textContent = 'İşleniyor...';
+            const errorEl = document.getElementById('approval-error');
+
+            try {
+                const inputHash = await hashPassword(password);
+                if (inputHash !== state.approvalHash) {
+                    errorEl.textContent = 'Yanlış şifre.';
+                    errorEl.style.display = 'block';
+                    rejectBtn.disabled = false;
+                    rejectBtn.innerHTML = `<i data-lucide="x"></i> Reddet`;
+                    initIcons();
+                    SoundManager.playError();
+                    return;
+                }
+
+                const removed = await rejectProducts(selected, state.products);
+                // Update local state
+                removed.forEach(barcode => {
+                    state.products = state.products.filter(p => p.barcode !== barcode);
+                    state.cart = state.cart.filter(i => i.barcode !== barcode);
+                });
+                // Cancel pending deletes that were rejected
+                selected.forEach(barcode => {
+                    const p = state.products.find(pr => pr.barcode === barcode);
+                    if (p) {
+                        p.pendingDelete = false;
+                        p.pending = false;
+                    }
+                });
+                StorageManager.saveCart(state.cart);
+
+                SoundManager.playSuccess();
+                showToast(`${selected.length} değişiklik reddedildi`, 'x');
+                closeModal();
+                render();
+            } catch (err) {
+                console.error(err);
+                errorEl.textContent = 'Bir hata oluştu.';
+                errorEl.style.display = 'block';
+                rejectBtn.disabled = false;
+            }
+        };
+    }
+
+    // Approve form submit
     document.getElementById('approval-form').onsubmit = async (e) => {
         e.preventDefault();
         const errorEl = document.getElementById('approval-error');
@@ -907,31 +1030,56 @@ const openApprovalModal = (selectedBarcodes = null) => {
                 closeModal();
 
                 // Re-open for approval if there are pending products
-                if (targetBarcodes.length > 0) {
-                    setTimeout(() => openApprovalModal(targetBarcodes), 300);
+                if (pendingProducts.length > 0) {
+                    setTimeout(() => openApprovalModal(), 300);
                 }
             } else {
-                // Verify mode — check password and approve
+                // Verify mode — check password and approve selected
+                const selected = getSelectedBarcodes();
+                if (selected.length === 0) {
+                    errorEl.textContent = 'Hiç ürün seçilmedi.';
+                    errorEl.style.display = 'block';
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = `<i data-lucide="check-circle"></i> Onayla`;
+                    initIcons();
+                    return;
+                }
+
                 const inputHash = await hashPassword(password);
                 if (inputHash !== state.approvalHash) {
                     errorEl.textContent = 'Yanlış şifre.';
                     errorEl.style.display = 'block';
                     submitBtn.disabled = false;
-                    submitBtn.innerHTML = `<i data-lucide="check-circle"></i> ${selectedBarcodes ? 'Seçilenleri Onayla' : 'Tümünü Onayla'}`;
+                    submitBtn.innerHTML = `<i data-lucide="check-circle"></i> Onayla`;
                     initIcons();
                     SoundManager.playError();
                     return;
                 }
 
                 // Approve products
-                await approveProducts(targetBarcodes);
-                targetBarcodes.forEach(barcode => {
-                    const product = state.products.find(p => p.barcode === barcode);
-                    if (product) product.pending = false;
+                const deletedBarcodes = await approveProducts(selected, state.products);
+                // Remove actually deleted products from local state
+                deletedBarcodes.forEach(barcode => {
+                    state.products = state.products.filter(p => p.barcode !== barcode);
+                    state.cart = state.cart.filter(i => i.barcode !== barcode);
                 });
+                // Clear pending flag on approved (non-deleted)
+                selected.forEach(barcode => {
+                    const product = state.products.find(p => p.barcode === barcode);
+                    if (product) {
+                        product.pending = false;
+                        product.pendingDelete = false;
+                    }
+                });
+                StorageManager.saveCart(state.cart);
 
                 SoundManager.playSuccess();
-                showToast(`${targetBarcodes.length} ürün onaylandı`, 'check-circle');
+                const approvedCount = selected.length - deletedBarcodes.length;
+                const deletedCount = deletedBarcodes.length;
+                let msg = '';
+                if (approvedCount > 0) msg += `${approvedCount} onaylandı`;
+                if (deletedCount > 0) msg += `${msg ? ', ' : ''}${deletedCount} silindi`;
+                showToast(msg, 'check-circle');
                 closeModal();
                 render();
             }
@@ -1006,15 +1154,21 @@ const renderProducts = () => {
 
         // Pending approval banner
         const pendingNow = state.products.filter(p => p.pending);
+        const pendingDeleteCount = pendingNow.filter(p => p.pendingDelete).length;
+        const pendingChangeCount = pendingNow.length - pendingDeleteCount;
         if (pendingNow.length > 0) {
             const banner = document.createElement('div');
             banner.className = 'pending-banner';
+            let bannerText = '';
+            if (pendingChangeCount > 0) bannerText += `<strong>${pendingChangeCount}</strong> değişiklik`;
+            if (pendingDeleteCount > 0) bannerText += `${bannerText ? ', ' : ''}<strong>${pendingDeleteCount}</strong> silme`;
+            bannerText += ' onay bekliyor';
             banner.innerHTML = `
                 <div class="pending-banner-content">
                     <i data-lucide="alert-triangle" size="18"></i>
-                    <span><strong>${pendingNow.length}</strong> ürün onay bekliyor</span>
+                    <span>${bannerText}</span>
                 </div>
-                <button class="pending-banner-btn" id="btn-banner-approve">Onayla</button>
+                <button class="pending-banner-btn" id="btn-banner-approve">Yönet</button>
             `;
             listContainer.appendChild(banner);
             document.getElementById('btn-banner-approve').onclick = () => openApprovalModal();
@@ -1054,23 +1208,27 @@ const renderProducts = () => {
         displayProducts.forEach(product => {
             const cartItem = state.cart.find(i => i.barcode === product.barcode);
             const qty = cartItem ? cartItem.quantity : 0;
-            const isPending = product.pending;
+            const isPending = product.pending && !product.pendingDelete;
+            const isDeleting = product.pendingDelete;
 
             const row = document.createElement('div');
-            row.className = `cart-item${isPending ? ' cart-item--pending' : ''}`;
+            row.className = `cart-item${isPending ? ' cart-item--pending' : ''}${isDeleting ? ' cart-item--deleting' : ''}`;
             row.innerHTML = `
                 <div class="product-click-area" style="display:flex; gap:12px; align-items:center; flex:1;">
                     <div class="product-image-wrapper">
-                        <img src="${product.image || 'https://placehold.co/100x100?text=No+Img'}" class="product-image" style="width:48px; height:48px; object-fit:cover; border-radius:4px;">
-                        ${isPending ? '<div class="pending-badge"><i data-lucide="alert-triangle" size="12"></i></div>' : ''}
+                        <img src="${product.image || 'https://placehold.co/100x100?text=No+Img'}" class="product-image" style="width:48px; height:48px; object-fit:cover; border-radius:4px; ${isDeleting ? 'opacity:0.5;' : ''}">
+                        ${isPending ? '<div class="pending-dot pending-dot--yellow"></div>' : ''}
+                        ${isDeleting ? '<div class="pending-dot pending-dot--red"></div>' : ''}
                     </div>
-                    <div>
-                        <div style="font-weight:600;">${product.name || 'İsimsiz Ürün'}</div>
+                    <div style="${isDeleting ? 'opacity:0.6;' : ''}">
+                        <div style="font-weight:600; ${isDeleting ? 'text-decoration:line-through;' : ''}">${product.name || 'İsimsiz Ürün'}</div>
                         <div style="color:var(--success); font-weight:700; font-size:0.95rem;">${(parseFloat(product.price) || 0).toFixed(2)}₺</div>
                     </div>
                 </div>
                 <div class="cart-controls">
-                    ${qty > 0 ? `
+                    ${isDeleting ? `
+                        <span style="font-size:0.75rem; color:var(--danger); font-weight:600;">Silinecek</span>
+                    ` : qty > 0 ? `
                         <button class="cart-btn btn-minus" data-barcode="${product.barcode}"><i data-lucide="minus" size="16"></i></button>
                         <span>${qty}</span>
                         <button class="cart-btn btn-plus" data-barcode="${product.barcode}"><i data-lucide="plus" size="16"></i></button>
